@@ -4,23 +4,32 @@ import random
 import sys
 from collections import defaultdict
 
+# run code with different initialization
+
 optparser = optparse.OptionParser()
 optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
 optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
 optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix of French filename (default=f)")
-optparser.add_option("-t", "--threshold", dest="threshold", default=0.5, type="float",
+optparser.add_option("-t", "--threshold", dest="threshold", default=0.36, type="float",
                      help="Threshold for aligning with Dice's coefficient (default=0.5)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=1000, type="int",
-                     help="Number of sentences to use for training and alignment")
+                     help="Number of sentences to use for training and alignment") # change amount of sentences here
 (opts, _) = optparser.parse_args()
 f_data = "%s.%s" % (opts.train, opts.french)
 e_data = "%s.%s" % (opts.train, opts.english)
 
+# corpus
+
 bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))][:opts.num_sents]
+
+# initialize dictionaries for foreign and english word count, foreign english pair counts, and t_ef counts for each pairing
+
 f_count = defaultdict(int)
 e_count = defaultdict(int)
 fe_count = defaultdict(int)
 t_ef = defaultdict(float)
+
+# enumerate through corpus to calculate count of foreign words, english words, and english/foreign word pairings
 
 for (n, (f, e)) in enumerate(bitext):
     for f_i in set(f):
@@ -29,12 +38,7 @@ for (n, (f, e)) in enumerate(bitext):
             fe_count[(e_j, f_i)] += 1
     for e_j in set(e):
         e_count[e_j] += 1
-    # if n % 500 == 0:
-        # sys.stderr.write(".")
 
-# initialisation
-
-# sys.stderr.write(".")
 
 
 s_total = {}
@@ -43,133 +47,163 @@ NumberOfCombinations = len(fe_count)
 
 q = dict()
 t = dict()
-for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
-    f = [None] + f
-    l_k = len(e) + 1
-    m_k = len(f)
-    for i in range(0, m_k):
-        for j in range(1, l_k):
-            q[(i, j, l_k, m_k)] = 1 / NumberOfCombinations
-            t_ef[(e[j-1],f[i])] = 1 / NumberOfCombinations
 
-# def delta(k,j,i,e,f):
-#     l_k=len(e)+1
-#     m_k=len(f)
-#
-#
-#     numerator = q[(i,j,l_k,m_k)]*t_ef[(e[j-1],f[i])]
-#
-#     denominator = sum([(q[(i,j,l_k,m_k)]*t_ef[(e[j-1],f[i])]) for i in range(0,m_k)])
-#     return numerator/denominator
+# initialize t_ef and q values used in Model 2
 
-iterations = 0
+def initialization(init_method):
 
+    if init_method=="uniform":
+        for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
+            f = [None] + f
+            l_k = len(e) + 1
+            m_k = len(f)
+            for i in range(0, m_k):
+                for j in range(1, l_k):
+                    q[(i, j, l_k, m_k)] = 1 / NumberOfCombinations
+                    t_ef[(e[j-1],f[i])] = 1 / NumberOfCombinations
+        return q, t_ef
 
+    elif init_method=="random":
+        for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
+            f = [None] + f
+            l_k = len(e) + 1
+            m_k = len(f)
+            for i in range(0, m_k):
+                for j in range(1, l_k):
+                    q[(i, j, l_k, m_k)] = random.uniform(0,1)
+                    t_ef[(e[j-1],f[i])] = random.uniform(0,1)
+        return q, t_ef
 
-for s in range(5):
+    elif init_method=="ibm_1":
+        for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
+            f = [None] + f
+            l_k = len(e) + 1
+            m_k = len(f)
+            for i in range(0, m_k):
+                for j in range(1, l_k):
+                    t_ef[(e[j-1],f[i])] = 1 / NumberOfCombinations
+                    q[(i, j, l_k, m_k)] = 1 / NumberOfCombinations
+        t_ef1 = IBM_model_1()
+        return q, t_ef1
 
-
-    c_ef = defaultdict(float)
-    c_f = defaultdict(float)
-    c_ij = defaultdict(float)
-    c_j = defaultdict(float)
-
-
-
-    for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
-        f = [None] + f
-        l_k = len(e)+1
-        m_k = len(f)
-
-
-        for j in range(1,l_k):
-            numerator=[]
-
-            for z in range(0, m_k):
-                numerator.append( t_ef[(e[j - 1], f[z])])
-
-            denominator = sum(numerator)
-
-            for i in range(0,m_k):
-
-                d = numerator[i] / denominator
-
-                c_ef[(e[j - 1], f[i])] += d
-                c_f[(f[i],)] += d
-                c_ij[(i, j, l_k, m_k)] += d
-                c_j[(j, l_k, m_k)] += d
+    return "Bad_value" , "Bad_value"
 
 
-    for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
-        f = [None] + f
-        l_k = len(e)+1
-        m_k = len(f)
-        for j in range(1, l_k): # for
-            for i in range(m_k): # for j = 0..l
-                q[(j,i,l_k,m_k)] = c_ij[(i, j, l_k, m_k)] / c_j[(j, l_k, m_k)]
-                t_ef[(e[j-1],f[i])] = c_ef[(e[j - 1], f[i])] / c_f[(f[i],)] # looks out for c2!!!
+# IBM Model 1 used to generate t_ef values input into IBM Model 2
+
+def IBM_model_1(max_iter=5):
+
+    # implement iter to stop IBM Model 1 after max_iter iterations
+
+    iter = 0
+    not_converged = True
+
+    while not_converged:
+
+        count = defaultdict(float)
+        total = defaultdict(float)
+
+        for (n, (f, e)) in enumerate(bitext):
+            for e_j in e:
+                s_total[e_j] = 0
+                for f_i in f:
+                    s_total[e_j] += t_ef[(e_j, f_i)]
+            for e_j in e:
+                for f_i in f:
+                    count[(e_j, f_i)] += t_ef[(e_j, f_i)] / s_total[e_j]
+                    total[f_i] += t_ef[(e_j, f_i)] / s_total[e_j]
+            for f_i in f:
+                for e_j in e:
+                    t_ef[(e_j, f_i)] = count[(e_j, f_i)] / total[f_i]
+
+        if iter == max_iter:
+            not_converged = False
+        iter += 1
+
+    return t_ef
+
+# IBM Model 2 which includes delta (alignment improvement)
+
+def IBM_model_2(t_ef,q,max_iter=5):
+
+    for s in range(max_iter):
+
+        c_ef = defaultdict(float)
+        c_f = defaultdict(float)
+        c_ij = defaultdict(float)
+        c_j = defaultdict(float)
+
+        # iterate through corpus and calculate c_ef, c_f, c_ij, and c_j
+        # these values are used later on to calculate t_ef and q values
+
+        for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
+            f = [None] + f
+            l_k = len(e)+1
+            m_k = len(f)
+
+
+            for j in range(1,l_k):
+                numerator=[]
+
+                for z in range(0, m_k):
+                    numerator.append(q[(z, j, l_k, m_k)] * t_ef[(e[j - 1], f[z])])
+
+                denominator = sum(numerator)
+
+                for i in range(0,m_k):
+
+                    d = numerator[i] / denominator
+
+                    c_ef[(e[j - 1], f[i])] += d
+                    c_f[(f[i],)] += d
+                    c_ij[(i, j, l_k, m_k)] += d
+                    c_j[(j, l_k, m_k)] += d
+
+        # calculate t_ef and q values necessary for producing word pairings
+
+        for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
+            f = [None] + f
+            l_k = len(e)+1
+            m_k = len(f)
+            for j in range(1, l_k): # for
+                for i in range(m_k): # for j = 0..l
+                    q[(j,i,l_k,m_k)] = c_ij[(i, j, l_k, m_k)] / c_j[(j, l_k, m_k)]
+                    t_ef[(e[j-1],f[i])] = c_ef[(e[j - 1], f[i])] / c_f[(f[i],)]
+
+        # prints example pairings and their t_ef at every iteration of the model to show real time functionality
+
+        sys.stderr.write("{}\n".format(s))
+        sys.stderr.write("the,les, {} \n".format(t_ef[("the","les")]))
+        sys.stderr.write("the,la  {} \n".format(t_ef[("the", "le")]))
+        sys.stderr.write("the, chacun  {} \n".format(t_ef[("the","chacun")]))
+        sys.stderr.write("the, none  {} \n".format(t_ef[("the", None)]))
+        sys.stderr.write("just, none  {} \n".format(t_ef[("just", None)]))
+
+    return t_ef
 
 
 
 
-for s in range(5):
+# specify method you would like for initialization values of t_ef and q
+# options: uniform, random, ibm_1
 
-    c_ef = defaultdict(float)
-    c_f = defaultdict(float)
-    c_ij = defaultdict(float)
-    c_j = defaultdict(float)
+method="ibm_1"
+q, t_ef = initialization(method)
 
+# t_ef value returned from Model 2 used for foreign - english word pairings
 
-
-    for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
-        f = [None] + f
-        l_k = len(e)+1
-        m_k = len(f)
+t_ef = IBM_model_2(t_ef,q)
 
 
-        for j in range(1,l_k):
-            numerator=[]
-
-            for z in range(0, m_k):
-                numerator.append(q[(z, j, l_k, m_k)] * t_ef[(e[j - 1], f[z])])
-
-            denominator = sum(numerator)
-
-            for i in range(0,m_k):
-
-                d = numerator[i] / denominator
-
-                c_ef[(e[j - 1], f[i])] += d
-                c_f[(f[i],)] += d
-                c_ij[(i, j, l_k, m_k)] += d
-                c_j[(j, l_k, m_k)] += d
-
-
-    for (k, (f, e)) in enumerate(bitext):  # for k = 1..n
-        f = [None] + f
-        l_k = len(e)+1
-        m_k = len(f)
-        for j in range(1, l_k): # for
-            for i in range(m_k): # for j = 0..l
-                q[(j,i,l_k,m_k)] = c_ij[(i, j, l_k, m_k)] / c_j[(j, l_k, m_k)]
-                t_ef[(e[j-1],f[i])] = c_ef[(e[j - 1], f[i])] / c_f[(f[i],)] # looks out for c2!!!
-
-    sys.stderr.write("{}\n".format(s))
-    sys.stderr.write("the,les, {} \n".format(t_ef[("the","les")]))
-    sys.stderr.write("the,la  {} \n".format(t_ef[("the", "le")]))
-    sys.stderr.write("the, chacun  {} \n".format(t_ef[("the","chacun")]))
-    sys.stderr.write("the, none  {} \n".format(t_ef[("the", None)]))
-
+# returning foreign to english word pairings
 
 for (f, e) in bitext:
-  # f = f
-  for (i, f_i) in enumerate(f):
-    for (j, e_j) in enumerate(e):
-      if t_ef[(e_j, f_i)] >= 0.3:
-        sys.stdout.write("%i-%i " % (i,j))
-  sys.stdout.write("\n")
-
-
+    # f = f
+    for (i, f_i) in enumerate(f):
+        for (j, e_j) in enumerate(e):
+            if t_ef[(e_j, f_i)] >= opts.threshold:
+                sys.stdout.write("%i-%i " % (i, j))
+    sys.stdout.write("\n")
 
 
 

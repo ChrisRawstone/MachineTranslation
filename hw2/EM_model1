@@ -3,22 +3,32 @@ import optparse
 import sys
 from collections import defaultdict
 
+# run code with different initialization
+
 optparser = optparse.OptionParser()
 optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
 optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
 optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix of French filename (default=f)")
 optparser.add_option("-t", "--threshold", dest="threshold", default=0.5, type="float",
                      help="Threshold for aligning with Dice's coefficient (default=0.5)")
-optparser.add_option("-n", "--num_sentences", dest="num_sents", default=2000, type="int",
+optparser.add_option("-n", "--num_sentences", dest="num_sents", default=100, type="int",
                      help="Number of sentences to use for training and alignment")
 (opts, _) = optparser.parse_args()
 f_data = "%s.%s" % (opts.train, opts.french)
 e_data = "%s.%s" % (opts.train, opts.english)
+
+# corpus
+
 bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))][:opts.num_sents]
+
+# initialize dictionaries for foreign and english word count, foreign english pair counts, and t_ef counts for each pairing
+
 f_count = defaultdict(int)
 e_count = defaultdict(int)
 fe_count = defaultdict(int)
 t_ef = defaultdict(float)
+
+# enumerate through corpus to calculate count of foreign words, english words, and english/foreign word pairings
 
 for (n, (f, e)) in enumerate(bitext):
     for f_i in f:
@@ -30,32 +40,27 @@ for (n, (f, e)) in enumerate(bitext):
     if n % 500 == 0:
         sys.stderr.write(".")
 
-# initialisation
-NumberOfCombinations = len(fe_count)
-
-for key in fe_count:
-    t_ef[key] = 1 / NumberOfCombinations
-
 sys.stderr.write(".")
 
-not_converged = True
+# initialization of t_ef and number of combinations
 
-
-# initialize t(e|f) uniformly
-num_converged = 0
 NumberOfCombinations = len(fe_count)
 
 for key in fe_count:
     t_ef[key] = 1 / NumberOfCombinations
 
 s_total = {}
+
+# initialize variables used in determining covergence of Model 1
+
+not_converged = True
 prev = 0
 convergenceSum = 0
 numProbabilities = 0
-iter=0
+
+# IBM Model 1 used to determine t_ef values
 
 while not_converged:
-    num_converged = 0
     count = defaultdict(float)
     total = defaultdict(float)
 
@@ -74,12 +79,13 @@ while not_converged:
                 t_ef[(e_j, f_i)] = count[(e_j, f_i)] / total[f_i]
                 convergenceSum += abs(prev - t_ef[(e_j, f_i)])
                 numProbabilities += 1
-    # temp = convergenceSum / numProbabilities
-    # if (convergenceSum / numProbabilities) < 0.002:
-    #     not_converged = False
-    if (iter==5):
+
+    # determine if Model 1 has converged using current and previous t_ef values for every word pairing
+
+    if (convergenceSum / numProbabilities) < 0.002:
         not_converged = False
-    iter+=1
+
+# returning foreign to english word pairings
 
 for (f, e) in bitext:
   for (i, f_i) in enumerate(f):
