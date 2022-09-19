@@ -1,8 +1,8 @@
-# Implemtation of IBM model 2 using different initializations
+# Implementation of IBM Model 2 using different initializations
 
-To run the code do the following commands in the terminal
+To run the code write the following commands in the terminal
 
-python hwEM_model2 > alignment 
+python EM_model2 > alignment 
 
 python score-alignments < alignment
 
