@@ -66,7 +66,7 @@ iterations = 0
 
 
 
-for s in range(15):
+for s in range(5):
 
 
     c_ef = defaultdict(float)
