@@ -2,8 +2,10 @@
 
 To run the code write the following commands in the terminal
 
+cd hw2
+
 python EM_model2 > alignment 
 
 python score-alignments < alignment
 
-To specify different initializations conditions look at the comments in the end of the code.
+To specify different initializations conditions look at the comments in the end of the code, see line 190.
