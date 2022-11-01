@@ -248,7 +248,7 @@ class EncoderRNN(nn.Module):
             input = self.embedding(input)
             output, hidden = self.LSTMForward.forward(input, hidden)
             return output, hidden
-        else: #Back ward pass
+        else: #Back ward passd
             forward_pass = False
             input = self.embedding(input)
             output, hidden = self.LSTMBackward.forward(input, hidden)
@@ -256,6 +256,9 @@ class EncoderRNN(nn.Module):
 
     def get_initial_hidden_state(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
+
+
+# agkrgkoaspgkskgposkopkgsdp
 
 
 class AttnDecoderRNN(nn.Module):
