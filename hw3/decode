@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+import optparse
+import sys
+import models
+from collections import namedtuple
+import math
+
+optparser = optparse.OptionParser()
+optparser.add_option("-i", "--input", dest="input", default="data/input", help="File containing sentences to translate (default=data/input)")
+optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
+optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
+optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxsize, type="int", help="Number of sentences to decodev1 (default=no limit)")
+optparser.add_option("-k", "--translations-per-phrase", dest="k", default=5, type="int", help="Limit on number of translations to consider per phrase (default=1)")
+optparser.add_option("-s", "--stack-size", dest="s", default=50, type="int", help="Maximum stack size (default=1)")
+optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
+opts = optparser.parse_args()[0]
+
+tm = models.TM(opts.tm, opts.k)
+lm = models.LM(opts.lm)
+french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+
+# tm should translate unknown words as-is with probability 1
+for word in set(sum(french,())):
+  if (word,) not in tm:
+    tm[(word,)] = [models.phrase(word, 0.0)]
+
+import itertools
+
+
+def determineRange(wordlen):
+  if wordlen-1 % 7 == 0:
+    ranges = 7
+  elif wordlen-1 % 6 == 0:
+    ranges = 6
+  elif wordlen-1 % 5 == 0:
+    ranges = 5
+  elif wordlen-1 % 4 == 0:
+    ranges = 4
+  elif wordlen-1 % 3 == 0:
+    ranges = 3
+  else:
+      if(wordlen < 3):
+         return wordlen
+      return determineRange(wordlen-1)
+
+  return ranges
+
+# This method returns a list of sentence permutations given a foreign sentence
+def reordering(words,runtype="fixedLength"):
+  words=list(words)
+  wordlen = len(words)
+
+   #using the variatonal length permutations
+  if runtype=="variationalLength":
+    ranges = determineRange(len(words))
+    numGroups = math.ceil(wordlen / ranges)
+
+  #Using the fixed permutations
+  if runtype=="fixedLength":
+    ranges=6 # Change this to switch permutation length
+    numGroups=math.ceil(wordlen/ranges)
+
+
+  sentencePermutations=[]
+
+
+  # All this is doing permutations and reordering of code in chunks.
+  for i in range(numGroups):
+    if len(words[i*ranges:]) < ranges:
+      tempList=list(words[i*ranges:])
+      for j in range(math.factorial(ranges)):
+        sentencePermutations.append([])
+        sentencePermutations[j] = sentencePermutations[j] + (list(tempList))
+    else:
+      tempList = list(itertools.permutations(words[i*ranges:i*ranges+ranges]))
+      for j in range(math.factorial(ranges)):
+        if i == 0:
+          sentencePermutations.append([])
+        sentencePermutations[j]=sentencePermutations[j]+(list(tempList[j]))
+
+  return sentencePermutations
+
+
+sys.stderr.write("Decoding %s...\n" % (opts.input,))
+for f in french:
+  # Following code implements beam search with reordering
+  hypothesis = namedtuple("hypothesis", "logprob, lm_state, predecessor, phrase")
+  initial_hypothesis = hypothesis(0.0, lm.begin(), None, None)
+  stacks = [{} for _ in f] + [{}]
+  stacks[0][lm.begin()] = initial_hypothesis
+  winner = hypothesis(-100.0, lm.begin(), None, None)
+  reorderingList = reordering(f)
+  for k in reorderingList: #Looping over permutations of the list
+    stacks = [{} for _ in f] + [{}] # Reinitialize stacks as empty after each permutation
+    stacks[0][lm.begin()] = initial_hypothesis
+    for i, stack in enumerate(stacks[:-1]):
+      for h in sorted(stack.values(),key=lambda h: -h.logprob)[:opts.s]: # prune
+        for j in range(i+1,len(f)+1):
+          if tuple(k[i:j]) in tm:
+            for phrase in tm[tuple(k[i:j])]:
+              logprob = h.logprob + phrase.logprob
+              lm_state = h.lm_state
+              for word in phrase.english.split():
+                (lm_state, word_logprob) = lm.score(lm_state, word)
+                logprob += word_logprob
+              logprob += lm.end(lm_state) if j == len(f) else 0.0
+              new_hypothesis = hypothesis(logprob, lm_state, h, phrase) # Update log probabilities of each hypothesis
+              if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
+                stacks[j][lm_state] = new_hypothesis
+    if bool(stacks[-1]):
+      currWinner = max(stacks[-1].values(), key=lambda h: h.logprob) # Keeping track of the currentBest
+      if currWinner[0] > winner[0]:
+        winner = currWinner # Update the best translation of a foreign sentence
+
+
+
+  def extract_english(h): 
+    return "" if h.predecessor is None else "%s%s " % (extract_english(h.predecessor), h.phrase.english)
+  print(extract_english(winner))
+
+  if opts.verbose:
+    def extract_tm_logprob(h):
+      return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
+    tm_logprob = extract_tm_logprob(winner)
+    sys.stderr.write("LM = %f, TM = %f, Total = %f\n" % 
+      (winner.logprob - tm_logprob, tm_logprob, winner.logprob))

@@ -1,0 +1,6 @@
+TO DO for MT
+
+FIX training seperation
+Remember dropout
+Remember to write that we having all the embedding in the LSTM function.
+Remember to change output name

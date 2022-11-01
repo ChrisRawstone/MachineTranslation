@@ -258,8 +258,6 @@ class EncoderRNN(nn.Module):
         return torch.zeros(1, 1, self.hidden_size, device=device)
 
 
-# agkrgkoaspgkskgposkopkgsdp
-
 
 class AttnDecoderRNN(nn.Module):
     """the class for the decoder

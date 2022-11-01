@@ -1,0 +1,17 @@
+> tu es voy@@ ant .
+= you re p@@ sy@@ ch@@ ic .
+< you are p@@ b@@ . . <EOS>
+
+> nous sommes en train de bou@@ ger .
+= we re mo@@ ving .
+< we re not coming . <EOS>
+
+Dev BLEU score: %.2f 0.3224797391447197
+input = on p@@ eu@@ t me faire confiance .
+output = i m doing dr@@ ing . . <EOS>
+input = j en suis contente .
+output = i m sick . it . <EOS>
+input = vous etes tres genti@@ ls .
+output = you re very funny . <EOS>
+input = c est mon hero@@ s 
+output = he is my brother . <EOS>
