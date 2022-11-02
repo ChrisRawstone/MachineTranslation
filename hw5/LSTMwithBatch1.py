@@ -37,8 +37,7 @@ import torch.nn.functional as F
 from nltk.translate.bleu_score import corpus_bleu
 from torch import optim
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s %(levelname)s %(message)s')
+
 
 # we are forcing the use of cpu, if you have access to a gpu, you can set the flag to "cuda"
 # make sure you are very careful if you are using a gpu on a shared cluster/grid,

@@ -320,17 +320,8 @@ class AttnDecoderRNN(nn.Module):
 ######################################################################
 
 
-#
-#
-#
-
-
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
     encoder_hidden = encoder.get_initial_hidden_state()
-
-    batch_size=8
-
-
 
     encoder.train()
     decoder.train()
@@ -554,18 +545,12 @@ def main():
     start = time.time()
     print_loss_total = 0  # Reset every print_every
 
-
-    # Use nn.pad sequenec
-
     while iter_num < n_iters:
         iter_num += 1
-        # training_pair = tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))
-        ls=[tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs)),tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))]
-        batchOfTwoInput=nn.utils.rnn.pad_sequence([ls[0][0],ls[1][0]])
-        batchOfTwoOutput=nn.utils.rnn.pad_sequence([ls[0][1],ls[1][1]])
-        # input_tensor = training_pair[0]
-        # target_tensor = training_pair[1]
-        loss = train(batchOfTwoInput, batchOfTwoOutput, encoder,
+        training_pair = tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))
+        input_tensor = training_pair[0]
+        target_tensor = training_pair[1]
+        loss = train(input_tensor, target_tensor, encoder,
                      decoder, optimizer, criterion)
         print_loss_total += loss
 
