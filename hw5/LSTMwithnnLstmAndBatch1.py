@@ -161,12 +161,19 @@ class EncoderRNN(nn.Module):
         # output, _ = self.LSTM(embeds.view(len(input), 1, -1))
 
         out1 = self.embedding(input).transpose(0,1)
+        global translationsMODE
+        if translationsMODE==True:
+            out1=out1.transpose(0,1).unsqueeze(0)
+
         output, hidden = self.LSTM(out1,hidden)
         return output, hidden
 
 
     def get_initial_hidden_state(self): # This mislead us a lot
         return torch.zeros(1, 2, self.hidden_size, device=device)
+
+    def get_initial_hidden_state_not_batch(self):
+        return torch.zeros(1, 1, self.hidden_size, device=device)
 
 
 
@@ -182,8 +189,8 @@ class AttnDecoderRNN(nn.Module):
         self.max_length = max_length
         self.dropout = nn.Dropout(self.dropout_p)
         self.embed = nn.Embedding(self.output_size, self.hidden_size)
-        self.attention = nn.Linear(self.hidden_size, self.max_length)
-        self.attention_layers = nn.Linear(self.hidden_size , self.hidden_size)
+        self.attention = nn.Linear(self.hidden_size *2 , self.max_length)
+        self.attention_layers = nn.Linear(self.hidden_size *2, self.hidden_size)
         self.LSTM = nn.LSTM(self.hidden_size,self.hidden_size)
         self.softmax = nn.LogSoftmax(dim=1)
         self.softmax_helper = nn.Linear(self.hidden_size, self.output_size)
@@ -197,13 +204,24 @@ class AttnDecoderRNN(nn.Module):
         "*** YOUR CODE HERE ***"
 
         embedding = self.embed(input)
-        embedding = self.dropout(embedding).transpose(0,1)
+        embedding = self.dropout(embedding)
 
-        attention_weights = F.softmax(self.attention(torch.cat((embedding, hidden[0]), 1)), dim=1)
 
-        output = torch.tanh(self.attention_layers(torch.cat((embedding[0], torch.bmm(attention_weights,
+        global firstIteration
+        if firstIteration==True:
+            embedding=embedding.transpose(0,1)
+            firstIteration=False
+
+        global translationsMODE
+        if translationsMODE==True:
+            embedding = embedding
+
+
+        attention_weights = F.softmax(self.attention(torch.cat((embedding[0], hidden[0][0]), 1)), dim=1)
+
+        output = torch.tanh(self.attention_layers(torch.cat((embedding[0], torch.bmm(attention_weights.unsqueeze(0),
                                  encoder_outputs.unsqueeze(0))[0]), 1)))
-        output, hidden = self.LSTM(output, hidden)
+        output, hidden = self.LSTM(output.unsqueeze(0), hidden)
 
         log_softmax = F.log_softmax(self.softmax_helper(output.squeeze(0)), dim=1)
         return log_softmax, hidden, attention_weights
@@ -213,12 +231,15 @@ class AttnDecoderRNN(nn.Module):
         return torch.zeros(1, 2, self.hidden_size, device=device)
 
 
+
+
 #######################################################################
 
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
     encoder_hidden = (encoder.get_initial_hidden_state(),encoder.get_initial_hidden_state())
 
-    batch_size=8
+    global translationsMODE
+    translationsMODE = False
 
 
 
@@ -249,10 +270,11 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
         decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_outputs)
         topv, topi = decoder_output.data.topk(1)
 
-        decoder_input = topi.squeeze().detach()
+        decoder_input = topi.squeeze().detach().unsqueeze(0)
 
-        loss += (decoder_output, target_tensor[di])
-        if topi.item() == "<EOS>":
+        loss += criterion(decoder_output[0].unsqueeze(0), target_tensor[di][0])
+        loss += criterion(decoder_output[1].unsqueeze(0), target_tensor[di][1])
+        if topi[0].item() == "<EOS>" or topi[1].item() == "<EOS>":
             break
 
 
@@ -272,10 +294,14 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     encoder.eval()
     decoder.eval()
 
+    global translationsMODE
+    translationsMODE=True
+
+
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder_hidden = (encoder.get_initial_hidden_state(),encoder.get_initial_hidden_state())
+        encoder_hidden = (encoder.get_initial_hidden_state_not_batch(),encoder.get_initial_hidden_state_not_batch())
 
         encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
@@ -291,6 +317,7 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
         decoded_words = []
         decoder_attentions = torch.zeros(max_length, max_length)
 
+
         for di in range(max_length):
             decoder_output, decoder_hidden, decoder_attention = decoder(
                 decoder_input, decoder_hidden, encoder_outputs)
@@ -302,7 +329,9 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
             else:
                 decoded_words.append(tgt_vocab.index2word[topi.item()])
 
-            decoder_input = topi.squeeze().detach()
+            decoder_input = topi.squeeze().detach().unsqueeze(0).unsqueeze(0)
+
+        translationsMODE=False
 
         return decoded_words, decoder_attentions[:di + 1]
 
@@ -445,6 +474,8 @@ def main():
 
     while iter_num < n_iters:
         iter_num += 1
+        global firstIteration
+        firstIteration = True
         # training_pair = tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))
         ls=[tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs)),tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))]
         batchOfTwoInput=nn.utils.rnn.pad_sequence([ls[0][0],ls[1][0]])
@@ -470,6 +501,7 @@ def main():
             logging.debug('wrote checkpoint to %s', filename)
 
         if iter_num % print_every == 0:
+            print("Iter:", iter_num, "/", n_iters)
             print_loss_avg = print_loss_total / print_every
             print_loss_total = 0
             logging.info('time since start:%s (iter:%d iter/n_iters:%d%%) loss_avg:%.4f',

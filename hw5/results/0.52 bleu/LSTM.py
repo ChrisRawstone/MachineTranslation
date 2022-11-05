@@ -10,6 +10,10 @@ Students *MAY NOT* view the above tutorial or use it as a reference in any way.
 
 from __future__ import unicode_literals, print_function, division
 
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
 import argparse
 import logging
 import random
@@ -37,7 +41,6 @@ import torch.nn.functional as F
 from nltk.translate.bleu_score import corpus_bleu
 from torch import optim
 
-
 # we are forcing the use of cpu, if you have access to a gpu, you can set the flag to "cuda"
 # make sure you are very careful if you are using a gpu on a shared cluster/grid,
 # it can be very easy to confict with other people's jobs.
@@ -50,6 +53,10 @@ EOS_token = "<EOS>"
 SOS_index = 0
 EOS_index = 1
 MAX_LENGTH = 15
+
+# CHANGE BATCH SIZE HERE
+
+BATCH_SIZE = 16
 
 
 class Vocab:
@@ -140,8 +147,41 @@ def tensors_from_pair(src_vocab, tgt_vocab, pair):
 
 ######################################################################
 
+# Basic softmax implementation
+def softmax(attention_weights):
+    appliedExponentials = torch.exp(attention_weights)
+    sumForNormalization = torch.sum(appliedExponentials)
+    return appliedExponentials / sumForNormalization
 
+# Taylor softmax implementation with 4 expansion terms
+def taylorSoftmax(attention_weights, num_iters, dimention=1):
+    for (idx, val) in enumerate(attention_weights[0]):
+        factorial = 1
+        numerator = 1
+        for j in range(1, num_iters):
+            factorial *= j
+            numerator = numerator + pow(val.item(), j)/factorial
+        attention_weights[0][idx] = numerator
+    sum = torch.sum(attention_weights)
+    return attention_weights / sum
 
+# SoftMargin Softmax implementation with 0.6 margin (supposedly optimized)
+def softMarginSoftmax(attention_weights):
+    appliedExponentials = torch.exp(attention_weights - 0.6)
+    sumForNormalization = torch.sum(appliedExponentials)
+    return appliedExponentials / sumForNormalization
+
+# SoftMargin Taylor softmax implementation with a 0.6 implementation
+def SM_Taylor_Softmax(attention_weights, num_iters):
+    for (idx, val) in enumerate(attention_weights[0]):
+        factorial = 1
+        numerator = 1
+        for j in range(1, num_iters):
+            factorial *= j
+            numerator = numerator + pow(val.item(), j)/factorial
+        attention_weights[0][idx] = numerator-0.6
+    sum = torch.sum(attention_weights)
+    return attention_weights / sum
 
 
 class EncoderRNN(nn.Module):
@@ -160,14 +200,19 @@ class EncoderRNN(nn.Module):
         # embeds=self.embedding(input)
         # output, _ = self.LSTM(embeds.view(len(input), 1, -1))
 
-        out1 = self.embedding(input).view(1, 1, -1)
-        output, hidden = self.LSTM(out1,hidden)
+        out1 = self.embedding(input).transpose(0, 1)
+        global translationsMODE
+        if translationsMODE == True:
+            out1 = out1.transpose(0, 1).unsqueeze(0)
+
+        output, hidden = self.LSTM(out1, hidden)
         return output, hidden
 
+    def get_initial_hidden_state(self):  # This mislead us a lot
+        return torch.zeros(1, BATCH_SIZE, self.hidden_size, device=device)
 
-    def get_initial_hidden_state(self): # This mislead us a lot
+    def get_initial_hidden_state_not_batch(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
-
 
 
 class AttnDecoderRNN(nn.Module):
@@ -184,7 +229,7 @@ class AttnDecoderRNN(nn.Module):
         self.embed = nn.Embedding(self.output_size, self.hidden_size)
         self.attention = nn.Linear(self.hidden_size * 2, self.max_length)
         self.attention_layers = nn.Linear(self.hidden_size * 2, self.hidden_size)
-        self.LSTM = nn.LSTM(self.hidden_size,self.hidden_size)
+        self.LSTM = nn.LSTM(self.hidden_size, self.hidden_size)
         self.softmax = nn.LogSoftmax(dim=1)
         self.softmax_helper = nn.Linear(self.hidden_size, self.output_size)
 
@@ -196,31 +241,43 @@ class AttnDecoderRNN(nn.Module):
         """
         "*** YOUR CODE HERE ***"
 
-        embedding = self.embed(input).view(1, 1, -1)
+        embedding = self.embed(input)
         embedding = self.dropout(embedding)
+
+        global firstIteration
+        if firstIteration == True:
+            embedding = embedding.transpose(0, 1)
+            firstIteration = False
+
+        global translationsMODE
+        if translationsMODE == True:
+            embedding = embedding
+
+        # REPLACE F.softmax() with softmax functions above to try different softmax approaches
 
         attention_weights = F.softmax(self.attention(torch.cat((embedding[0], hidden[0][0]), 1)), dim=1)
 
         output = torch.tanh(self.attention_layers(torch.cat((embedding[0], torch.bmm(attention_weights.unsqueeze(0),
-                                 encoder_outputs.unsqueeze(0))[0]), 1)).unsqueeze(0))
-        output, hidden = self.LSTM.forward(output, hidden)
+                                                                                     encoder_outputs.unsqueeze(0))[0]),
+                                                            1)))
+        output, hidden = self.LSTM(output.unsqueeze(0), hidden)
 
         log_softmax = F.log_softmax(self.softmax_helper(output.squeeze(0)), dim=1)
         return log_softmax, hidden, attention_weights
 
-
     def get_initial_hidden_state(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        return torch.zeros(1, BATCH_SIZE, self.hidden_size, device=device)
 
 
 #######################################################################
 
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
-    encoder_hidden = (encoder.get_initial_hidden_state(),encoder.get_initial_hidden_state())
+    encoder_hidden = (encoder.get_initial_hidden_state(), encoder.get_initial_hidden_state())
 
-    batch_size=8
+    # initialize translation state
 
-
+    global translationsMODE
+    translationsMODE = False
 
     encoder.train()
     decoder.train()
@@ -236,12 +293,16 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
 
     loss = 0
 
-    for ei in range(input_length): # Getting outputs from encoder
+    for ei in range(input_length):  # Getting outputs from encoder
         encoder_output, encoder_hidden = encoder(
             input_tensor[ei], encoder_hidden)
         encoder_outputs[ei] = encoder_output[0, 0]
 
-    decoder_input = torch.tensor([[SOS_index]], device=device)
+    sos_indexes = []
+    for i in range(BATCH_SIZE): # Append batch size number of start of sentence tokens for sos indexes list
+        sos_indexes.append([SOS_index])
+
+    decoder_input = torch.tensor(sos_indexes, device=device)
 
     decoder_hidden = encoder_hidden
 
@@ -249,13 +310,12 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
         decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_outputs)
         topv, topi = decoder_output.data.topk(1)
 
-        decoder_input = topi.squeeze().detach()
+        decoder_input = topi.squeeze().detach().unsqueeze(0)
 
-        loss += criterion(decoder_output, target_tensor[di])
-        if topi.item() == "<EOS>":
-            break
-
-
+        for i in range(BATCH_SIZE):
+            loss += criterion(decoder_output[i].unsqueeze(0), target_tensor[di][i])
+            if topi[i].item() == "<EOS>":
+                break
 
     loss.backward()
     optimizer.step()
@@ -273,10 +333,13 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     encoder.eval()
     decoder.eval()
 
+    global translationsMODE
+    translationsMODE = True
+
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder_hidden = (encoder.get_initial_hidden_state(),encoder.get_initial_hidden_state())
+        encoder_hidden = (encoder.get_initial_hidden_state_not_batch(), encoder.get_initial_hidden_state_not_batch())
 
         encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
@@ -303,7 +366,9 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
             else:
                 decoded_words.append(tgt_vocab.index2word[topi.item()])
 
-            decoder_input = topi.squeeze().detach()
+            decoder_input = topi.squeeze().detach().unsqueeze(0).unsqueeze(0)
+
+        translationsMODE = False
 
         return decoded_words, decoder_attentions[:di + 1]
 
@@ -349,22 +414,20 @@ def show_attention(input_sentence, output_words, attentions):
 
     npattentions = np.array(attentions)
 
-    global plotnumber,axlist
+    global plotnumber, axlist
 
-    axlist[plotnumber-1].xaxis.tick_top()
-    axlist[plotnumber-1].xaxis.set_major_locator(ticker.MultipleLocator(1))
-    axlist[plotnumber-1].yaxis.set_major_locator(ticker.MultipleLocator(1))
+    axlist[plotnumber - 1].xaxis.tick_top()
+    axlist[plotnumber - 1].xaxis.set_major_locator(ticker.MultipleLocator(1))
+    axlist[plotnumber - 1].yaxis.set_major_locator(ticker.MultipleLocator(1))
 
-    axlist[plotnumber-1].imshow(npattentions)
+    axlist[plotnumber - 1].imshow(npattentions)
 
-    ticklabelx=[''] + input_sentence.split(' ') +['<end>']
-    ticklabely=[''] + output_words + ['<end>']
-    axlist[plotnumber-1].set_xticklabels(ticklabelx,rotation=90)
-    axlist[plotnumber-1].set_yticklabels(ticklabely)
+    ticklabelx = [''] + input_sentence.split(' ') + ['<end>']
+    ticklabely = [''] + output_words + ['<end>']
+    axlist[plotnumber - 1].set_xticklabels(ticklabelx, rotation=90)
+    axlist[plotnumber - 1].set_yticklabels(ticklabely)
 
-    plotnumber=plotnumber+1
-
-
+    plotnumber = plotnumber + 1
 
 
 def translate_and_show_attention(input_sentence, encoder1, decoder1, src_vocab, tgt_vocab):
@@ -383,14 +446,17 @@ def clean(strx):
     return ' '.join(strx.replace('@@ ', '').replace(EOS_token, '').strip().split())
 
 
+def get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
+
 ######################################################################
 
 def main():
-
-
     hidden_size = 256
-    n_iters = 5
-    print_every = 2
+    n_iters = 20000
+    print_every = 1000
     checkpoint_every = 10000
     initial_learning_rate = 0.001
     src_lang = 'fr'
@@ -398,7 +464,7 @@ def main():
     train_file = 'data/fren.train.bpe'
     dev_file = 'data/fren.dev.bpe'
     test_file = 'data/fren.test.bpe'
-    out_file = 'out.txt'
+    out_file = 'out3v10.txt'
     load_checkpoint = None
 
     # process the training, dev, test files
@@ -412,7 +478,7 @@ def main():
         tgt_vocab = state['tgt_vocab']
     else:
         iter_num = 0
-        src_vocab, tgt_vocab = make_vocabs(src_lang,tgt_lang,train_file)
+        src_vocab, tgt_vocab = make_vocabs(src_lang, tgt_lang, train_file)
 
     encoder = EncoderRNN(src_vocab.n_words, hidden_size).to(device)
     decoder = AttnDecoderRNN(hidden_size, tgt_vocab.n_words).to(device)
@@ -431,6 +497,8 @@ def main():
     # set up optimization/loss
     params = list(encoder.parameters()) + list(decoder.parameters())  # .parameters() returns generator
     optimizer = optim.Adam(params, lr=initial_learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5000, min_lr=0.00005, factor=0.5,
+                                                           cooldown=20000)
     criterion = nn.NLLLoss()
 
     # optimizer may have state
@@ -441,23 +509,35 @@ def main():
     start = time.time()
     print_loss_total = 0  # Reset every print_every
 
-
     # Use nn.pad sequenec
 
     while iter_num < n_iters:
-
         iter_num += 1
-        training_pair = tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))
-        # ls=[tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs)),tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs))]
-        # batchOfTwoInput=nn.utils.rnn.pad_sequence([ls[0][0],ls[1][0]])
-        # batchOfTwoOutput=nn.utils.rnn.pad_sequence([ls[0][1],ls[1][1]])
-        input_tensor = training_pair[0]
-        target_tensor = training_pair[1]
-        loss = train(input_tensor, target_tensor, encoder,
-                     decoder, optimizer, criterion)
-        # loss = train(batchOfTwoInput, batchOfTwoOutput, encoder,
+        global firstIteration
+        firstIteration = True
+        inputList = []
+        outputList = []
+        tensors = []
+
+        # Get Batch_size number of translation pairs
+        for i in range(BATCH_SIZE):
+            tensors.append(tensors_from_pair(src_vocab, tgt_vocab, random.choice(train_pairs)))
+
+        # Split translation pairs into input and target (output)
+        for i in range(BATCH_SIZE):
+            inputList.append(tensors[i][0])
+            outputList.append(tensors[i][1])
+        batchInput = nn.utils.rnn.pad_sequence(inputList)
+        batchOutput = nn.utils.rnn.pad_sequence(outputList)
+        # input_tensor = training_pair[0]
+        # target_tensor = training_pair[1]
+        # loss = train(input_tensor, target_tensor, encoder,
         #              decoder, optimizer, criterion)
+        loss = train(batchInput, batchOutput, encoder,
+                     decoder, optimizer, criterion)
         print_loss_total += loss
+        # print("LR = ",get_lr(optimizer))
+        scheduler.step(loss)
 
         if iter_num % checkpoint_every == 0:
             state = {'iter_num': iter_num,
@@ -473,13 +553,9 @@ def main():
 
         if iter_num % print_every == 0:
             print("Iter:", iter_num, "/", n_iters)
-            print_loss_avg = print_loss_total / print_every
-            print_loss_total = 0
-            logging.info('time since start:%s (iter:%d iter/n_iters:%d%%) loss_avg:%.4f',
-                         time.time() - start,
-                         iter_num,
-                         iter_num / n_iters * 100,
-                         print_loss_avg)
+            temptime = time.time() - start
+            print(f'time since start:{temptime:.2f} s')
+            print("LR = ", get_lr(optimizer), "Loss = ", loss)
             # translate from the dev set
             translate_random_sentence(encoder, decoder, dev_pairs, src_vocab, tgt_vocab, n=2)
             translated_sentences = translate_sentences(encoder, decoder, dev_pairs, src_vocab, tgt_vocab)
@@ -488,6 +564,7 @@ def main():
             candidates = [clean(sent).split() for sent in translated_sentences]
             dev_bleu = corpus_bleu(references, candidates)
             print('Dev BLEU score: %.2f', dev_bleu)
+
             # logging.info('Dev BLEU score: %.2f', dev_bleu)
 
     # translate test set and write to file
@@ -499,11 +576,10 @@ def main():
     global axlist
     fig, ax = plt.subplots(nrows=2, ncols=2)
 
-    axlist=[ax[0,0],ax[1,0],ax[0,1],ax[1,1]]
+    axlist = [ax[0, 0], ax[1, 0], ax[0, 1], ax[1, 1]]
 
     global plotnumber
-    plotnumber=1
-
+    plotnumber = 1
 
     # Visualizing Attention
     translate_and_show_attention("on p@@ eu@@ t me faire confiance .", encoder, decoder, src_vocab, tgt_vocab)
@@ -513,5 +589,7 @@ def main():
 
     plt.show()
 
+
 if __name__ == '__main__':
     main()
+
